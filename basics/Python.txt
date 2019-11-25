@@ -1,0 +1,3 @@
+Python 
+1. idle3 is the editor for python in linux
+. pyCharm is the ide for python developed by jetbrains (windows).
