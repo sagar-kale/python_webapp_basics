@@ -1,35 +1,27 @@
-# simplified_app.py - Single table with shared servers that multiple users can connect to
+# async_simplified_app.py - Async version with AsyncSession
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
-from sqlmodel import SQLModel, Field, Session, select, create_engine, JSON, Column
-from sqlalchemy import DateTime, func, and_
+from sqlmodel import SQLModel, Field, select, JSON, Column
+from sqlalchemy import DateTime, func
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from fastapi import FastAPI, HTTPException, Depends
 
-# ==================== SINGLE TABLE MODEL ====================
+# ==================== MODELS (same as before) ====================
 
 class MCPServer(SQLModel, table=True):
-    # Auto-generated UUID as primary key
     server_id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    
-    # Server information (shared across all users)
     name: str = Field(index=True)
-    server_type: str  # e.g., "filesystem", "database", "websearch", etc.
+    server_type: str
     description: Optional[str] = None
-    base_config: Dict[str, Any] = Field(sa_column=Column(JSON))  # Base server config
-    is_active: bool = Field(default=True)  # Admin can enable/disable servers
-    
-    # User connection info (NULL if not connected to any user)
-    user_id: Optional[str] = Field(default=None, index=True)  # NULL = available, has value = connected
+    base_config: Dict[str, Any] = Field(sa_column=Column(JSON))
+    is_active: bool = Field(default=True)
+    user_id: Optional[str] = Field(default=None, index=True)
     is_connected: bool = Field(default=False, index=True)
-    user_config: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))  # User-specific config
-    
-    # Timestamps
+    user_config: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True), server_default=func.now()))
     connected_at: Optional[datetime] = None
     last_used: Optional[datetime] = None
-
-# ==================== API MODELS ====================
 
 class MCPServerCreate(SQLModel):
     name: str
@@ -61,7 +53,6 @@ class MCPServerRead(SQLModel):
     last_used: Optional[datetime]
 
 class AvailableServerRead(SQLModel):
-    """For available servers list (without user-specific info)"""
     server_id: str
     name: str
     server_type: str
@@ -80,13 +71,13 @@ class ConnectionResponse(SQLModel):
     message: str
     server_id: str
 
-# ==================== DATABASE OPERATIONS ====================
+# ==================== ASYNC DATABASE OPERATIONS ====================
 
-class MCPDatabaseOperations:
-    def __init__(self, session: Session):
+class AsyncMCPDatabaseOperations:
+    def __init__(self, session: AsyncSession):
         self.session = session
     
-    def create_server(self, server_data: MCPServerCreate) -> MCPServer:
+    async def create_server(self, server_data: MCPServerCreate) -> MCPServer:
         """Create a new MCP server (admin function)"""
         server = MCPServer(
             name=server_data.name,
@@ -94,123 +85,128 @@ class MCPDatabaseOperations:
             description=server_data.description,
             base_config=server_data.base_config,
             is_active=True,
-            user_id=None,  # Available for connection
+            user_id=None,
             is_connected=False
         )
         self.session.add(server)
-        self.session.commit()
-        self.session.refresh(server)
+        await self.session.commit()
+        await self.session.refresh(server)
         return server
     
-    def get_available_servers(self) -> List[MCPServer]:
+    async def get_available_servers(self) -> List[MCPServer]:
         """Get all active servers that are available for connection"""
         statement = select(MCPServer).where(
             MCPServer.is_active == True,
             MCPServer.user_id.is_(None)
         )
-        return self.session.exec(statement).all()
+        result = await self.session.exec(statement)
+        return result.all()
     
-    def get_user_servers(self, user_id: str) -> List[MCPServer]:
+    async def get_user_servers(self, user_id: str) -> List[MCPServer]:
         """Get all servers connected to a specific user"""
         statement = select(MCPServer).where(MCPServer.user_id == user_id)
-        return self.session.exec(statement).all()
+        result = await self.session.exec(statement)
+        return result.all()
     
-    def get_connected_servers(self, user_id: str) -> List[MCPServer]:
+    async def get_connected_servers(self, user_id: str) -> List[MCPServer]:
         """Get only connected servers for a user"""
         statement = select(MCPServer).where(
             MCPServer.user_id == user_id,
             MCPServer.is_connected == True
         )
-        return self.session.exec(statement).all()
+        result = await self.session.exec(statement)
+        return result.all()
     
-    def get_server_by_id(self, server_id: str) -> Optional[MCPServer]:
+    async def get_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """Get server by ID"""
         statement = select(MCPServer).where(MCPServer.server_id == server_id)
-        return self.session.exec(statement).first()
+        result = await self.session.exec(statement)
+        return result.first()
     
-    def get_user_server_by_id(self, server_id: str, user_id: str) -> Optional[MCPServer]:
+    async def get_user_server_by_id(self, server_id: str, user_id: str) -> Optional[MCPServer]:
         """Get server by ID that belongs to specific user"""
         statement = select(MCPServer).where(
             MCPServer.server_id == server_id,
             MCPServer.user_id == user_id
         )
-        return self.session.exec(statement).first()
+        result = await self.session.exec(statement)
+        return result.first()
     
-    def connect_server(self, server_id: str, user_id: str, user_config: Optional[Dict[str, Any]] = None) -> bool:
+    async def connect_server(self, server_id: str, user_id: str, user_config: Optional[Dict[str, Any]] = None) -> bool:
         """Connect user to an available server"""
-        server = self.get_server_by_id(server_id)
+        server = await self.get_server_by_id(server_id)
         if server and server.is_active and server.user_id is None:
-            # Server is available for connection
             server.user_id = user_id
             server.is_connected = True
             server.user_config = user_config
             server.connected_at = datetime.utcnow()
             server.last_used = datetime.utcnow()
             self.session.add(server)
-            self.session.commit()
+            await self.session.commit()
             return True
         return False
     
-    def disconnect_server(self, server_id: str, user_id: str) -> bool:
+    async def disconnect_server(self, server_id: str, user_id: str) -> bool:
         """Disconnect user from a server"""
-        server = self.get_user_server_by_id(server_id, user_id)
+        server = await self.get_user_server_by_id(server_id, user_id)
         if server:
             server.is_connected = False
-            # Note: We keep user_id to maintain "Your Servers" list
             self.session.add(server)
-            self.session.commit()
+            await self.session.commit()
             return True
         return False
     
-    def reconnect_server(self, server_id: str, user_id: str) -> bool:
+    async def reconnect_server(self, server_id: str, user_id: str) -> bool:
         """Reconnect user to a server they previously connected to"""
-        server = self.get_user_server_by_id(server_id, user_id)
+        server = await self.get_user_server_by_id(server_id, user_id)
         if server and server.is_active:
             server.is_connected = True
             server.connected_at = datetime.utcnow()
             server.last_used = datetime.utcnow()
             self.session.add(server)
-            self.session.commit()
+            await self.session.commit()
             return True
         return False
     
-    def update_user_config(self, server_id: str, user_id: str, user_config: Dict[str, Any]) -> bool:
+    async def update_user_config(self, server_id: str, user_id: str, user_config: Dict[str, Any]) -> bool:
         """Update user-specific configuration for a server"""
-        server = self.get_user_server_by_id(server_id, user_id)
+        server = await self.get_user_server_by_id(server_id, user_id)
         if server:
             server.user_config = user_config
             server.last_used = datetime.utcnow()
             self.session.add(server)
-            self.session.commit()
+            await self.session.commit()
             return True
         return False
     
-    def update_server(self, server_id: str, update_data: MCPServerUpdate) -> Optional[MCPServer]:
+    async def update_server(self, server_id: str, update_data: MCPServerUpdate) -> Optional[MCPServer]:
         """Update server details (admin function)"""
-        server = self.get_server_by_id(server_id)
+        server = await self.get_server_by_id(server_id)
         if server:
             for field, value in update_data.dict(exclude_unset=True).items():
                 setattr(server, field, value)
             
             self.session.add(server)
-            self.session.commit()
-            self.session.refresh(server)
+            await self.session.commit()
+            await self.session.refresh(server)
             return server
         return None
     
-    def delete_server(self, server_id: str) -> bool:
+    async def delete_server(self, server_id: str) -> bool:
         """Delete a server (admin function)"""
-        server = self.get_server_by_id(server_id)
+        server = await self.get_server_by_id(server_id)
         if server:
-            self.session.delete(server)
-            self.session.commit()
+            await self.session.delete(server)
+            await self.session.commit()
             return True
         return False
     
-    def initialize_sample_servers(self):
+    async def initialize_sample_servers(self):
         """Initialize sample servers for the platform"""
         # Check if servers already exist
-        existing_servers = self.session.exec(select(MCPServer)).first()
+        statement = select(MCPServer)
+        result = await self.session.exec(statement)
+        existing_servers = result.first()
         
         if not existing_servers:
             sample_servers = [
@@ -265,7 +261,7 @@ class MCPDatabaseOperations:
             ]
             
             for server_data in sample_servers:
-                self.create_server(server_data)
+                await self.create_server(server_data)
             
             print(f"Created {len(sample_servers)} sample servers")
 
@@ -278,38 +274,40 @@ def get_current_userid() -> str:
 
 app = FastAPI(title="MCP Server Management API")
 
-# Database setup
-DATABASE_URL = "sqlite:///mcp_servers.db"
-engine = create_engine(DATABASE_URL)
+# Async Database setup
+DATABASE_URL = "sqlite+aiosqlite:///mcp_servers.db"  # Note: aiosqlite for async
+async_engine = create_async_engine(DATABASE_URL)
+async_session_maker = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
-def create_db_and_tables():
+async def create_db_and_tables():
     """Create database tables"""
-    SQLModel.metadata.create_all(engine)
+    async with async_engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
 
-def get_session():
-    """Database session dependency"""
-    with Session(engine) as session:
+async def get_session():
+    """Async database session dependency"""
+    async with async_session_maker() as session:
         yield session
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and sample servers"""
-    create_db_and_tables()
+    await create_db_and_tables()
     
     # Create sample servers
-    with Session(engine) as session:
-        db_ops = MCPDatabaseOperations(session)
-        db_ops.initialize_sample_servers()
+    async with async_session_maker() as session:
+        db_ops = AsyncMCPDatabaseOperations(session)
+        await db_ops.initialize_sample_servers()
 
 # ==================== API ENDPOINTS ====================
 
 @app.get("/api/available-servers")
 async def get_available_servers(
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     """Get all available servers that can be connected to"""
-    db_ops = MCPDatabaseOperations(session)
-    servers = db_ops.get_available_servers()
+    db_ops = AsyncMCPDatabaseOperations(session)
+    servers = await db_ops.get_available_servers()
     
     available_servers = [
         AvailableServerRead(**server.dict()) 
@@ -320,23 +318,23 @@ async def get_available_servers(
 
 @app.get("/api/your-servers")
 async def get_your_servers(
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_userid)
 ):
     """Get all servers this user has ever connected to"""
-    db_ops = MCPDatabaseOperations(session)
-    servers = db_ops.get_user_servers(user_id)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    servers = await db_ops.get_user_servers(user_id)
     
     return MCPServerListResponse(servers=servers)
 
 @app.get("/api/connected-servers")
 async def get_connected_servers(
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_userid)
 ):
     """Get servers this user is currently connected to"""
-    db_ops = MCPDatabaseOperations(session)
-    servers = db_ops.get_connected_servers(user_id)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    servers = await db_ops.get_connected_servers(user_id)
     
     return MCPServerListResponse(servers=servers)
 
@@ -344,17 +342,17 @@ async def get_connected_servers(
 async def connect_server(
     server_id: str,
     connection_data: Optional[UserConnectionUpdate] = None,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_userid)
 ):
     """Connect to an available server"""
-    db_ops = MCPDatabaseOperations(session)
+    db_ops = AsyncMCPDatabaseOperations(session)
     
     # Check if user already connected to this server
-    existing_connection = db_ops.get_user_server_by_id(server_id, user_id)
+    existing_connection = await db_ops.get_user_server_by_id(server_id, user_id)
     if existing_connection:
         # User previously connected, just reconnect
-        success = db_ops.reconnect_server(server_id, user_id)
+        success = await db_ops.reconnect_server(server_id, user_id)
         if success:
             return ConnectionResponse(
                 message="Successfully reconnected to server",
@@ -365,7 +363,7 @@ async def connect_server(
     
     # First time connection
     user_config = connection_data.user_config if connection_data else None
-    success = db_ops.connect_server(server_id, user_id, user_config)
+    success = await db_ops.connect_server(server_id, user_id, user_config)
     
     if success:
         return ConnectionResponse(
@@ -378,12 +376,12 @@ async def connect_server(
 @app.post("/api/disconnect-server/{server_id}")
 async def disconnect_server(
     server_id: str,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_userid)
 ):
     """Disconnect from a server"""
-    db_ops = MCPDatabaseOperations(session)
-    success = db_ops.disconnect_server(server_id, user_id)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    success = await db_ops.disconnect_server(server_id, user_id)
     
     if success:
         return ConnectionResponse(
@@ -397,12 +395,12 @@ async def disconnect_server(
 async def update_user_config(
     server_id: str,
     config_data: UserConnectionUpdate,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_userid)
 ):
     """Update user-specific configuration for a server"""
-    db_ops = MCPDatabaseOperations(session)
-    success = db_ops.update_user_config(server_id, user_id, config_data.user_config)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    success = await db_ops.update_user_config(server_id, user_id, config_data.user_config)
     
     if success:
         return {"message": "User configuration updated successfully"}
@@ -412,18 +410,18 @@ async def update_user_config(
 @app.get("/api/servers/{server_id}")
 async def get_server_details(
     server_id: str,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_userid)
 ):
     """Get server details"""
-    db_ops = MCPDatabaseOperations(session)
+    db_ops = AsyncMCPDatabaseOperations(session)
     
     # Try to get user's connection to this server first
-    server = db_ops.get_user_server_by_id(server_id, user_id)
+    server = await db_ops.get_user_server_by_id(server_id, user_id)
     
     if not server:
         # If user doesn't have connection, get the base server info
-        server = db_ops.get_server_by_id(server_id)
+        server = await db_ops.get_server_by_id(server_id)
     
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
@@ -435,11 +433,11 @@ async def get_server_details(
 @app.post("/api/admin/servers")
 async def create_server(
     server_data: MCPServerCreate,
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     """Create a new MCP server (admin function)"""
-    db_ops = MCPDatabaseOperations(session)
-    server = db_ops.create_server(server_data)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    server = await db_ops.create_server(server_data)
     
     return {
         "message": "Server created successfully",
@@ -450,11 +448,11 @@ async def create_server(
 async def update_server(
     server_id: str,
     update_data: MCPServerUpdate,
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     """Update server details (admin function)"""
-    db_ops = MCPDatabaseOperations(session)
-    server = db_ops.update_server(server_id, update_data)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    server = await db_ops.update_server(server_id, update_data)
     
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
@@ -467,11 +465,11 @@ async def update_server(
 @app.delete("/api/admin/servers/{server_id}")
 async def delete_server(
     server_id: str,
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     """Delete a server (admin function)"""
-    db_ops = MCPDatabaseOperations(session)
-    success = db_ops.delete_server(server_id)
+    db_ops = AsyncMCPDatabaseOperations(session)
+    success = await db_ops.delete_server(server_id)
     
     if success:
         return {"message": "Server deleted successfully"}
