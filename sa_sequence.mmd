@@ -1,0 +1,57 @@
+sequenceDiagram
+    participant User as User (Web UI)
+    participant UI as Frontend (UI)
+    participant FastAPI as FastAPI App
+    participant OAuth as OAuth Provider
+    participant MCPH as Per-User MCP Handler
+    participant LLMH as Per-User LLM Handler
+    participant MCP as MCP Server
+    participant LangGraph as LangGraph/LangChain  
+    participant GPT4 as GPT-4 API
+    participant CheckPts as Checkpointer
+    participant DB as App DB
+
+    User->>UI: Open App
+    UI->>OAuth: Automatic OAuth login
+    OAuth-->>UI: Auth code/token
+    UI->>FastAPI: Send token, Login Request
+    FastAPI->>DB: Validate/Create User
+    FastAPI-->>UI: Login Success, Show Chat UI
+
+    User->>UI: Click "Link MCP Server"
+    UI->>FastAPI: Request MCP Connect
+    FastAPI->>MCPH: Get per-user MCP handler
+    MCPH->>MCP: Connect / Fetch Tools List
+    MCP-->>MCPH: Return Tools Metadata
+    MCPH-->>FastAPI: Tools for User
+
+    User->>UI: Click "New Chat"
+    UI->>FastAPI: Create Chat
+    FastAPI->>DB: Create Chat Record (thread_id)
+    FastAPI->>LLMH: Get/Create per-user LLM Handler
+    FastAPI->>MCPH: Get User’s Tool List
+    LLMH->>LangGraph: Build/Compile Graph (with Tools, GPT-4)
+    LangGraph->>LLMH: Graph Compiled/Stored for Session
+
+    User->>UI: Send Message
+    UI->>FastAPI: Send Message (via Socket.IO)
+    FastAPI->>LLMH: Get User’s LangGraph Chat Graph
+    LLMH->>LangGraph: Invoke Graph (process input)
+    alt Need Tool Call
+        LangGraph->>MCP: Call Tool(s)
+        MCP-->>LangGraph: Tool Results
+        LangGraph->>LLMH: Continue Processing
+    end
+    alt Human Approval Required
+        LangGraph-->>UI: Show Approval Request
+        User->>UI: Approve/Reject
+        UI->>FastAPI: Send Approval/Rejection
+        FastAPI->>LLMH: Forward User Response
+        LLMH->>LangGraph: Continue/Alternate Path
+    end
+    LangGraph->>GPT4: Query GPT-4 (as needed in chain)
+    GPT4-->>LangGraph: Response
+    LangGraph->>LLMH: Final Response
+    LLMH->>CheckPts: Store Conversation Thread
+    LLMH-->>FastAPI: Final Result
+    FastAPI-->>UI: Display Output
