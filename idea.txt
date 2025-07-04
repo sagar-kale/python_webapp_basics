@@ -1,0 +1,43 @@
+************* System Design 1 **********************
+UI (Frontend), deployed with the Python FastAPI backend, launches with automatic OAuth, and presents a ChatGPT-like interface. The user can create new chats, view/select MCP servers, and connect to them to fetch tools dynamically.
+FastAPI Backend:
+Socket.IO Manager for real-time chat.
+Per-user Handlers: Each user has their own LLM Handler (builds and manages a Graph using LangGraph/LangChain with GPT-4 and tools specific to the selected MCP server) and MCP Handler (manages the connection to MCP server and tool retrieval).
+Database (app.db): Stores users, chats (with thread_id for history), MCP servers, etc.
+Checkpointer: Persists conversation history per chat/thread (file-based SQLite).
+LangGraph / LangChain:
+Each user’s LLM Handler builds/compiles the conversation graph using the retrieved tools, GPT-4 as the model, and plug-in modules.
+Graph logic: LLM → Tool → Human Approval → if approved: Tools, else: LLM → Humanized Response → End.
+External MCP Servers (provide tools listing & execution).
+OAuth Provider (User login).
+GPT-4 API.
+Architecture Diagram
+This diagram groups components logically, shows deployment, dynamic tool fetching per-user, real-time communication, and external service dependencies.
+
+Key Interaction Sequence Diagram
+Focus: New user session, OAuth, new chat creation, MCP connection, tool loading, dynamic graph build, and chat invocation.
+
+Summary of What’s Improved in this Architecture Design:
+
+All per-user state and built graphs handled server-side, mapped by user/session (RESTful and scalable!).
+Dynamic tool fetching/binding for each chat/linked MCP, supporting personal “agent” logic for each user context.
+Real-time chat and per-thread history managed and checkpointed.
+Clean separation of OAuth, DB, session-handlers, Chat/Checkpointer logic, LLM/graph engines, and tool sources.
+
+
+*************************** system design v2 *****************************
+Summary: The system comprises a UI (with automatic OAuth), a FastAPI backend managing per-user session handlers for MCP and LLM (LangGraph/LangChain+GPT-4), a dynamic tool plumbing layer per-user, real-time Socket.IO for chat, and persistence via SQLite. Each chat allows fetching tools dynamically from user-selected MCP servers, compiles a custom agent with tools using a graph per user, and real-time chat is managed with per-thread checkpointing.
+
+Improved System Architecture Prompt (for Documentation, PRs, or Stakeholders)
+This system is a multi-user chat platform with dynamic agent compilation. The frontend launches with automatic OAuth, then enables users to start chat sessions, dynamically link to any external MCP tool server, and create custom chat agents on the fly for each user and chat.
+
+Key Technical Points:
+
+Per-user LLM and MCP handlers are managed in FastAPI using a user-id mapped registry.
+Tools from MCP servers are dynamically fetched per session and bound during LangGraph agent compile time (using GPT-4/LangChain).
+Each Chat has a separate thread/checkpointer (SQLite), chat records, and allows ad-hoc tool selection.
+State is strictly per-user and does not leak; all logic is isolated by user identity/session.
+Upgrades are easy: swap out GPT-4, add new tool server types, replace DB/checkpoint backend, or enhance the chat graph.
+
+**************************** SYSTEM DESIGN V3 ***************************************
+
