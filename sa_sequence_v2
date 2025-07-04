@@ -1,0 +1,74 @@
+sequenceDiagram
+    autonumber
+    box Frontend
+      participant User as User (Web UI)
+      participant UI as Chat Interface
+    end
+    box Backend
+      participant FastAPI as FastAPI Core
+      participant SocketIO as Socket.IO Manager
+      participant DB as App DB
+      participant CP as Conversation<br/>Checkpointer
+      participant MCPH as MCP Handler
+      participant LLMH as LLM Handler
+    end
+    box LLM_Stack
+      participant LG as LangGraph<br/>Orchestrator
+      participant LC as LangChain
+      participant GPT4 as OpenAI GPT-4
+    end
+    box External
+      participant MCP as MCP Server
+      participant OAUTH as OAuth Provider
+    end
+
+    User->>UI: Open App
+    UI->>OAUTH: Automatic OAuth Login
+    OAUTH-->>UI: Auth Token
+    UI->>FastAPI: Login (token)
+    FastAPI->>DB: Get/Create User
+    FastAPI-->>UI: Login OK, show UI
+
+    User->>UI: Click "Link MCP Server"
+    UI->>FastAPI: Link MCP Server (server_id)
+    FastAPI->>MCPH: Get/create MCP Handler for user
+    MCPH->>MCP: Connect & fetch tools
+    MCP-->>MCPH: Tool List/Details
+    MCPH-->>FastAPI: Tool List
+    FastAPI-->>UI: Show available tools
+
+    User->>UI: Click "New Chat"
+    UI->>FastAPI: New Chat request
+    FastAPI->>DB: Create Thread ID, Title
+    FastAPI->>LLMH: Get/create per-user LLM Handler
+
+    FastAPI->>MCPH: Get tools for this user/server
+    LLMH->>LG: Build/compile chat agent graph<br/>(with tools, GPT-4)
+    LG->>LC: Bind tools, configure agent
+    LC->>GPT4: (ready for LLM step as needed)
+    LG-->>LLMH: Compiled graph returned
+
+    User->>UI: Send Message
+    UI->>SocketIO: (via socket)
+    SocketIO->>LLMH: Get agent graph for user/thread
+    LLMH->>LG: Inject message, run flow
+
+    alt Tool invocation in chat
+      LG->>MCP: Call tool(s) as needed
+      MCP-->>LG: Tool results
+    end
+    alt Human Approval needed
+      LG-->>UI: Request approval(review)
+      User->>UI: Approve/Reject
+      UI->>SocketIO: Approval/Reject event
+      SocketIO->>LLMH: Forward approval/reject
+      LLMH->>LG: Continue or reroute in graph
+    end
+    loop Core agent step(s)
+      LG->>GPT4: (LLM response as needed)
+      GPT4-->>LG: Result
+    end
+    LG->>LLMH: Final response
+    LLMH->>CP: Save conversation state (thread_id)
+    LLMH-->>SocketIO: Emit chat output
+    SocketIO-->>UI: Show reply
