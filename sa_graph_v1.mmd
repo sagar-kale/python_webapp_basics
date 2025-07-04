@@ -1,0 +1,42 @@
+graph TD
+    subgraph "User's Browser"
+        UI[UI - Chat Interface]
+    end
+
+    subgraph "Backend (FastAPI Application)"
+        A[FastAPI App]
+        B[Socket.IO Manager]
+        C[Per-User MCP Handlers]
+        D[Per-User LLM Handlers]
+    end
+
+    subgraph "Conversational Core (LangChain & LangGraph)"
+        E[LangGraph]
+        F[Checkpointer]
+    end
+
+    subgraph "Data Stores"
+        G[Application DB]
+    end
+
+    subgraph "External Services"
+        H[External MCP Server]
+        I[OAuth Provider]
+        J[GPT-4 API]
+    end
+
+    UI -- HTTP/WebSocket --> A
+    A -- Manages --> B
+    A -- Creates/Accesses --> C
+    A -- Creates/Accesses --> D
+    B -- Invokes --> D
+
+    D -- Builds & Compiles --> E
+    D -- Binds Tools & Calls --> J
+    E -- Uses --> F
+    E -- Executes --> H
+    C -- Connects & Fetches Tools --> H
+
+    A -- CRUD --> G
+
+    UI -- OAuth Redirect --> I
