@@ -1,0 +1,11 @@
+graph TD
+    A[Start] --> B(Call LLM);
+    B --> C{Tool Call <br> Requested?};
+    C -- No --> I[End];
+    C -- Yes --> D(Present for <br> Human Approval);
+    D --> E{Approved?};
+    E -- No --> H(Call LLM for <br> Humanized Response);
+    H --> I;
+    E -- Yes --> F[Execute Tool];
+    F --> G(Call LLM with <br> Tool Result);
+    G --> C;
