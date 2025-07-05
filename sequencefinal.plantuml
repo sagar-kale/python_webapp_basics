@@ -1,0 +1,110 @@
+@startuml
+!theme mars
+autonumber
+
+title Deep Level System Interaction
+
+participant "User" as User
+participant "UI (Browser)" as UI
+participant "FastAPI HTTP" as FastAPI_HTTP
+participant "Socket.IO Manager" as Socket_IO
+participant "MCP Handler" as MCP_Handler
+participant "LLM Handler" as LLM_Handler
+participant "LangGraph" as LangGraph
+participant "App DB" as App_DB
+participant "MCP Server" as MCP_Server
+participant "GPT-4.1" as GPT_4_1
+
+== Phase 1: Initial App Load & Setup ==
+
+User -> UI: Launches App
+UI -> FastAPI_HTTP: Initiates OAuth Login
+FastAPI_HTTP --> UI: User Authenticated, Token Issued
+
+UI -> FastAPI_HTTP: POST /initialize
+activate FastAPI_HTTP
+note over FastAPI_HTTP: Creates per-user MCP and LLM Handlers (in-memory)
+FastAPI_HTTP -> MCP_Handler: Instantiate
+FastAPI_HTTP -> LLM_Handler: Instantiate (with tool-less graph)
+FastAPI_HTTP --> UI: Init Complete
+deactivate FastAPI_HTTP
+
+UI -> FastAPI_HTTP: GET /servers
+FastAPI_HTTP -> App_DB: SELECT * FROM servers
+App_DB --> FastAPI_HTTP: Returns list of available servers
+FastAPI_HTTP --> UI: List of servers
+
+== Phase 2: User Connects to Server & Loads Tools ==
+
+User -> UI: Clicks 'Connect' to a specific server
+UI -> FastAPI_HTTP: POST /connect (server_id)
+activate FastAPI_HTTP
+FastAPI_HTTP -> MCP_Handler: connect_and_fetch_tools(server_id)
+activate MCP_Handler
+MCP_Handler -> MCP_Server: Request tools for server_id
+activate MCP_Server
+MCP_Server --> MCP_Handler: List of Tools
+deactivate MCP_Server
+MCP_Handler -> LLM_Handler: recompile_graph_with_tools(tools)
+activate LLM_Handler
+note over LLM_Handler: LangGraph is re-compiled with tools bound to it
+LLM_Handler --> MCP_Handler: Success
+deactivate LLM_Handler
+MCP_Handler --> FastAPI_HTTP: Success
+deactivate MCP_Handler
+FastAPI_HTTP --> UI: "Tools Loaded"
+deactivate FastAPI_HTTP
+
+== Phase 3: Real-time Chat Session ==
+
+User -> UI: Clicks 'New Chat'
+UI -> FastAPI_HTTP: POST /chats
+activate FastAPI_HTTP
+FastAPI_HTTP -> App_DB: INSERT new chat, generate thread_id
+App_DB --> FastAPI_HTTP: New chat object with thread_id
+FastAPI_HTTP --> UI: {chat_id, thread_id}
+deactivate FastAPI_HTTP
+
+UI -> Socket_IO: Establish Authenticated WebSocket Connection
+
+User -> UI: Types and sends a message
+UI -> Socket_IO: socket.emit('process_message', {msg, thread_id})
+activate Socket_IO
+Socket_IO -> LLM_Handler: invoke(message, thread_id)
+activate LLM_Handler
+LLM_Handler -> LangGraph: ainvoke(input) with thread_id for history
+activate LangGraph
+
+LangGraph -> GPT_4_1: Initial LLM call
+GPT_4_1 --> LangGraph: Response (with tool call request)
+
+LangGraph -> UI: Stream 'Human Approval' request
+activate UI
+UI --> User: Shows approval prompt
+User --> UI: Approves/Rejects
+deactivate UI
+UI -> LangGraph: Sends approval response
+
+alt User Approves
+    LangGraph -> MCP_Server: Execute Tool
+    activate MCP_Server
+    MCP_Server --> LangGraph: Tool Result
+    deactivate MCP_Server
+    LangGraph -> GPT_4_1: Call LLM again with tool result
+    GPT_4_1 --> LangGraph: Final Answer
+else User Rejects
+    LangGraph -> GPT_4_1: Call LLM for humanized response
+    GPT_4_1 --> LangGraph: Humanized Answer
+end
+
+LangGraph --> LLM_Handler: Final response stream
+deactivate LangGraph
+LLM_Handler --> Socket_IO: Stream message chunks
+deactivate LLM_Handler
+Socket_IO --> UI: socket.emit('agent_message', {chunk})
+activate UI
+UI --> User: Displays streaming response
+deactivate UI
+deactivate Socket_IO
+
+@enduml
