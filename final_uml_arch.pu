@@ -1,0 +1,81 @@
+```plantuml
+@startuml
+left to right direction
+!theme sandstone
+
+' --- Style and Icon Definitions ---
+hide stereotype
+skinparam actorStyle awesome
+skinparam component<<backend>> {
+    BackgroundColor #2C3E50
+    BorderColor #34495E
+    FontColor #FFFFFF
+}
+skinparam database<<backend>> {
+    BackgroundColor #2C3E50
+    BorderColor #34495E
+    FontColor #FFFFFF
+}
+skinparam component<<internal>> {
+    BackgroundColor #1E8449
+    BorderColor #145A32
+    FontColor #FFFFFF
+}
+skinparam cloud<<internal>> {
+    BackgroundColor #1E8449
+    BorderColor #145A32
+    FontColor #FFFFFF
+}
+
+' --- Component Definitions ---
+actor "<&person>\nUser" as user
+
+package "User's Browser" {
+  component "<&monitor>\nUI (Chat Interface)" as ui
+}
+
+package "Organization Services" {
+    package "Backend Infrastructure (FastAPI)" as BackendPackage {
+      component "<&bolt>\nFastAPI HTTP Endpoints" as http_api <<backend>>
+      component "<&transfer>\nSocket.IO Manager" as socket_io <<backend>>
+      component "<&cog>\nPer-User LLM Handler" as llm_handler <<backend>>
+      component "<&cog>\nPer-User MCP Handlers" as mcp_handler <<backend>>
+      component "[LangGraph Engine]" as lang_graph <<backend>>
+      component "[Checkpointer]" as checkpointer <<backend>>
+      database "<&data>\nApplication DB" as app_db <<backend>>
+    }
+
+    package "Internal Org Services" as InternalPackage {
+      cloud "<&cloud>\nGPT-4.1 (AWS)" as gpt4 <<internal>>
+      component "<&box>\nInternal MCP Server" as mcp_server <<internal>>
+      component "<&shield-alt>\nInternal OAuth" as oauth <<internal>>
+      component "<&key>\nAzure AD" as azure_ad <<internal>>
+    }
+}
+
+' --- Layout and Relationship Definitions ---
+BackendPackage -[hidden]d- InternalPackage
+
+' Visible Relationships
+user --> ui
+ui --> http_api
+ui ..> socket_io : "sends {msg, thread_id}"
+ui --> oauth
+
+http_api --> mcp_handler
+socket_io --> llm_handler : "invokes with thread_id"
+http_api ..> llm_handler
+
+llm_handler ..> lang_graph : Contains & Runs
+lang_graph ..> checkpointer : Uses
+
+http_api ..> app_db : "Manages users, chats"
+mcp_handler ..> app_db : "Reads connection state"
+
+' Corrected: LangGraph calls the model and the tools
+lang_graph --> gpt4 : API Calls
+lang_graph --> mcp_server : Executes Tools
+
+gpt4 <-- azure_ad : Authenticated via
+@enduml
+```
