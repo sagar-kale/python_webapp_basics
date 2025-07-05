@@ -1,0 +1,89 @@
+@startuml
+!theme plain
+
+' Define colors for different sections
+skinparam actorStyle awesome
+skinparam package {
+    BackgroundColor #D6EAF8
+    BorderColor #2874A6
+    StereotypeFontColor #2874A6
+    FontColor #17202A
+}
+skinparam rectangle<<Backend>> {
+    StereotypeFontColor #FFFFFF
+    BackgroundColor #2C3E50
+    BorderColor #2C3E50
+}
+skinparam rectangle<<Core>> {
+    StereotypeFontColor #FFFFFF
+    BackgroundColor #2980B9
+    BorderColor #2980B9
+}
+skinparam rectangle<<Data>> {
+    StereotypeFontColor #FFFFFF
+    BackgroundColor #7F8C8D
+    BorderColor #7F8C8D
+}
+skinparam rectangle<<InternalCloud>> {
+    StereotypeFontColor #FFFFFF
+    BackgroundColor #16A085
+    BorderColor #16A085
+}
+
+
+' Start of the diagram layout
+actor "User" as user
+
+package "User's Browser" {
+  node "UI (Chat Interface)" as ui #EBF5FB
+}
+
+package "Backend Infrastructure (FastAPI)" {
+    frame "Backend Application" <<Backend>> {
+        [FastAPI App] as fast_api
+        [Socket.IO Manager] as socket_io
+        [Per-User MCP Handlers] as mcp_handler
+        [Per-User LLM Handlers] as llm_handler
+    }
+
+    frame "Conversational Core" <<Core>> {
+        [LangGraph Engine] as lang_graph
+        [Checkpointer] as checkpointer
+    }
+
+    frame "Data Stores" <<Data>> {
+        database "Application DB\n(Chats, Servers)" as app_db
+    }
+}
+
+package "Internal Org Services / Private Cloud" {
+    frame "Services" <<InternalCloud>> {
+        cloud "GPT-4.1\n(Internal AWS)" as gpt4
+        node "Internal MCP Server\n(Tools Provider)" as mcp_server
+        node "Internal OAuth Provider" as oauth
+        node "Azure AD" as azure_ad
+    }
+}
+
+
+' Define relationships
+user -right-> ui : Interacts with chat
+ui <.right.> fast_api : HTTP / WebSocket
+
+fast_api --> socket_io : Manages
+fast_api --> mcp_handler : Creates/\nAccesses
+fast_api --> llm_handler : Creates/\nAccesses
+socket_io --> llm_handler : Invokes graph
+
+llm_handler -right-> gpt4 : API Calls
+gpt4 <.up. azure_ad : Authenticated via
+
+mcp_handler -right-> mcp_server : Fetches Tools
+
+lang_graph --> checkpointer : Uses for History
+lang_graph --> mcp_server : Executes Tools
+
+fast_api -down-> app_db : CRUD Operations
+ui -down-> oauth : OAuth Redirect
+
+@enduml
