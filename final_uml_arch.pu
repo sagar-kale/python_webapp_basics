@@ -1,4 +1,3 @@
-```plantuml
 @startuml
 left to right direction
 !theme sandstone
@@ -78,4 +77,3 @@ lang_graph --> mcp_server : Executes Tools
 
 gpt4 <-- azure_ad : Authenticated via
 @enduml
-```
