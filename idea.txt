@@ -40,4 +40,69 @@ State is strictly per-user and does not leak; all logic is isolated by user iden
 Upgrades are easy: swap out GPT-4, add new tool server types, replace DB/checkpoint backend, or enhance the chat graph.
 
 **************************** SYSTEM DESIGN V3 ***************************************
+## System Overview
+
+The system is a sophisticated, session-based conversational AI platform. It features a Python backend using FastAPI and a dynamic web UI. The core of the system provides a chat interface where each user's conversational agent can be dynamically equipped with different tools from various sources. The architecture is designed to be modular and stateful on a per-user basis, with in-memory handlers managing the logic for each active user.
+
+## Core Components
+
+UI (Web Interface): A standard chat interface where users can manage multiple conversations. It authenticates the user, displays a list of available tool servers (MCP Servers), and communicates with the backend via both HTTP REST endpoints for setup and WebSockets (Socket.IO) for real-time chat messages.
+
+FastAPI Backend: The central application server.
+
+HTTP Endpoints: Manages user authentication, session initialization (/initialize), fetching server lists (/servers), and connecting to tool servers (/connect). It's also responsible for creating new chat sessions and their associated thread_id in the database.
+
+Socket.IO Manager: Handles persistent, authenticated WebSocket connections for real-time, bidirectional chat communication. It receives messages from the UI and routes them to the appropriate user's handler.
+
+Handler Managers (In-Memory Singletons): Two manager classes (LLMHandlerManager, MCPHandlerManager) that maintain Python dictionaries. These dictionaries map a user_id to an instance of a handler, ensuring each user has their own dedicated object to manage their state.
+
+Per-User MCP Handler: An object responsible for managing connections to the Model Context Protocol (MCP) Servers. When a user connects to a server, this handler's client fetches the list of available tools from that specific server.
+
+Per-User LLM Handler: This object is the primary controller for a user's conversation. It contains the compiled LangGraph instance. Its key responsibility is to receive requests from the API/Socket layers and invoke the graph. It also triggers the recompilation of the graph when new tools are provided by the MCP Handler.
+
+LangGraph Engine: This is the heart of the AI logic, contained within the LLM Handler.
+
+Dynamic Compilation: The graph is compiled on a per-user basis. It's initially compiled without tools and then re-compiled with new tools when a user connects to an MCP Server.
+
+Execution Flow: The graph's defined process is: Call LLM -> Check for Tool Call -> Human Approval Step -> (If Approved) -> Execute Tool -> Loop to LLM with result; (If Rejected) -> Call LLM for a humanized response -> End.
+
+State Management: It uses a thread_id (provided with each message) to maintain conversation history via a Checkpointer.
+
+Data Stores:
+
+Application DB (SQLite): A database that stores persistent data such as user accounts, chat metadata (including the crucial thread_id for each conversation), and the list of available MCP Servers.
+
+Checkpointer (File-based SQLite): Used exclusively by LangGraph to save and load the state of each conversation thread, enabling memory.
+
+Internal Services:
+
+Internal MCP Server: An internal service that exposes a set of tools that the agent can use.
+
+GPT-4.1: A self-hosted large language model running on the organization's private AWS cloud.
+
+Azure AD & OAuth Provider: Internal services used for user authentication and for securing the internal GPT-4.1 endpoint.
+
+## Key Workflows
+
+Initialization & Tool Loading:
+
+The user logs in via OAuth. An initialize API call creates the user's LLM Handler and MCP Handler in memory.
+
+The UI fetches and displays a list of available MCP Servers.
+
+The user clicks "Connect" on a server. A connect API call triggers the MCP Handler to fetch tools from that server.
+
+The MCP Handler then passes these tools to the LLM Handler, which re-compiles its internal LangGraph instance, making the new tools available for the agent.
+
+Chat Processing:
+
+The user starts a "New Chat," which calls an HTTP endpoint to create a record in the Application DB and generates a unique thread_id. The UI receives and stores this thread_id.
+
+For every message, the UI sends the message text and the corresponding thread_id over the Socket.IO connection.
+
+The backend's Socket.IO Manager receives the payload, identifies the user, and retrieves their specific LLM Handler instance.
+
+It invokes the handler's LangGraph with the message and the thread_id. The graph executes its defined logic (calling the LLM, tools, etc.), using the Checkpointer and thread_id to maintain conversation history.
+
+The final response is streamed back to the UI over the WebSocket.
 
